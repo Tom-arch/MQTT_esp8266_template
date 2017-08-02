@@ -3,6 +3,8 @@
 //Global includes
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include <EEPROM.h>
+
 
 //Define constants: pin numbers and delays. Warning: do not use PIN GPIO 16 (D0) since it is LED_BUILTIN
 #define NO_WIFI   200
@@ -10,6 +12,10 @@
 #define WORKING   0
 #define PUB_DELAY 30000
 #define ERR       4
+#define ADDR_VALID 0
+#define ADDR_STATUS 1
+#define RELAY_PIN  12
+
 
 //Global constants
 // Wifi
@@ -25,18 +31,24 @@ const PROGMEM char* PASSWORD = "password";
 const PROGMEM char* STATE_TOPIC = "topic/status";
 const PROGMEM char* COMMAND_TOPIC = "topic/commands";
 
-// payload
+// Payload
 const char* PAYLOAD_ON = "ON";
 const char* PAYLOAD_OFF = "OFF";
 
+
 //Global variables
-bool ledStatus = false;
 bool wifiRequested = false;
+
+bool ledStatus = false;
 unsigned long nextBlinkMillis = 0;
 unsigned long nextStatusMillis = 0;
+
 bool publishStatus = false;
 unsigned long blinkInterval = NO_WIFI;
+
 volatile uint8_t command = ERR;
+bool relayStatus = false;
+
 WiFiClient wfClient;
 PubSubClient mqttClient;
 
@@ -50,12 +62,23 @@ void setup() {
   
   //Pins initialization
   pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
   /* Please complete with modes and initial states for output pins */
 
   // Init the mqtt client parameters
   mqttClient.setClient(wfClient);
   mqttClient.setServer(SERVER, PORT);
   mqttClient.setCallback(callback);
+
+  //EEPROM initialization. The EEPROM is used to save the status in case the board resets. Nothing should be written here
+  EEPROM.begin(10);
+  bool valid = EEPROM.read(ADDR_VALID);
+  if(valid) {
+    bool is_on = EEPROM.read(ADDR_STATUS);
+    relayStatus = is_on;
+    digitalWrite(RELAY_PIN, is_on);
+  } //Else leave the default values
 
   //Led initialization and pattern
   digitalWrite(LED_BUILTIN, LOW);
@@ -92,6 +115,17 @@ void executeCommand() {
   //Save the command variable to avoid incoherent results caused by its modification
   uint8_t cmd = command;
   command = ERR;
+  if (cmd == 0) {
+    digitalWrite(RELAY_PIN, HIGH);
+    relayStatus = true;
+    EEPROM.write(ADDR_STATUS, true);
+    EEPROM.commit();
+  } else if (cmd == 1) {
+    digitalWrite(RELAY_PIN, LOW);
+    relayStatus = false;
+    EEPROM.write(ADDR_STATUS, false);
+    EEPROM.commit();
+  }
   
   /* Please complete */
   
