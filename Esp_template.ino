@@ -10,7 +10,7 @@
 //Define constants: pin numbers and delays. Warning: do not use PIN GPIO 16 (D0) since it is LED_BUILTIN
 //Delays in milliseconds
 #define NO_WIFI   100
-#define NO_MQTT   500
+#define NO_MQTT   1000
 #define WORKING   0
 #define PUB_DELAY 30000 //This should be the sensor publishing interval
 #define SENSOR_DELAY 1000 //This should be the actual sensor reading delay. The difference helps keeping low bandwidth occupation.
@@ -45,11 +45,12 @@ const char* PAYLOAD_OFF = "OFF";
   //The wifi has been requested?
 bool wifiRequested = false;
 
-  //Led blink global variables -> led status, time of the next blink, time between two blinks
+  //Led blink global variables -> led status, time of the next blink, time between two blinks, boolean that tells id we should try reconnecting.
 bool ledStatus = false;
 unsigned long nextBlinkMillis = 0;
 unsigned long blinkInterval = NO_WIFI;
-unsigned long blinkTemp = 0;
+//unsigned long blinkTemp = 0; //Debug
+bool reconnect = false;
 
   //Sensor reading variables -> sensor value, time of the next publishing
 bool sensorValue = false;
@@ -131,13 +132,13 @@ void loop() {
   
   //Check the connectivity
   checkConnectivity();
-
+/* Debug
   if(blinkInterval != blinkTemp) {
     Serial.println("BLINK CHANGE");
     Serial.println(blinkInterval);
   }
   blinkTemp = blinkInterval;
-  
+*/
 }
 
 
@@ -178,12 +179,13 @@ void checkTimers() {
   //Sample the current time
   unsigned long currentMillis = millis();
 
-  //Blink timer handling
+  //Blink and MQTT connecting timer handling
   if (blinkInterval == WORKING) { //If the system is working leave the led on
     digitalWrite(LED_BUILTIN, LOW);
     ledStatus = true;
   } else if(currentMillis >= nextBlinkMillis) {
     triggerLed();
+    reconnect = true;
     nextBlinkMillis = currentMillis + blinkInterval;
   }
 
@@ -222,9 +224,13 @@ void checkConnectivity() {
     wifiRequested = false;
     //Check if MQTT is not connected
     if (!mqttClient.connected()) {
-      if(mqttClient.connect(CLIENT_ID, USERNAME, PASSWORD)) {
-        mqttClient.subscribe(COMMAND_TOPIC);
-        /* Please add topics */
+      if (reconnect) {
+        Serial.println(" MQTT RECONNECT");
+        if(mqttClient.connect(CLIENT_ID, USERNAME, PASSWORD)) {
+          mqttClient.subscribe(COMMAND_TOPIC);
+          /* Please add topics */
+        }
+        reconnect = false;
       }
       blinkInterval = NO_MQTT;
     } else {
