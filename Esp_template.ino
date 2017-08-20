@@ -5,6 +5,7 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <EEPROM.h>
+#include <AsyncTimer.h>
 
 
 //Define constants: pin numbers and delays. Warning: do not use PIN GPIO 16 (D0) since it is LED_BUILTIN
@@ -12,8 +13,9 @@
 #define NO_WIFI   100
 #define NO_MQTT   1000
 #define WORKING   0
-#define PUB_DELAY 30000 //This should be the sensor publishing interval
+#define PUB_DELAY 30000 //This should be the sensor status publishing interval
 #define SENSOR_DELAY 1000 //This should be the actual sensor reading delay. The difference helps keeping low bandwidth occupation.
+#define REC_DELAY 2000
 #define ERR       4
 #define VALID_ADDR 0
 #define STATUS_ADDR 1
@@ -23,15 +25,15 @@
 
 //Global constants
 // Wifi
-const PROGMEM char* WL_SSID = "your_ssid";
-const PROGMEM char* WL_PWD = "your_password";
+const PROGMEM char* WL_SSID = "wifi";
+const PROGMEM char* WL_PWD = "q167JT3W";
 
 // MQTT
 const PROGMEM char* SERVER = "192.168.1.4";
 const PROGMEM uint16_t PORT = 1883;
 const PROGMEM char* CLIENT_ID = "your_client_id";
 const PROGMEM char* USERNAME = "test";
-const PROGMEM char* PASSWORD = "password";
+const PROGMEM char* PASSWORD = "4vxQbCcZNcscp4nd";
 const PROGMEM char* STATE_TOPIC = "test/status";
 const PROGMEM char* COMMAND_TOPIC = "test/commands";
 const PROGMEM char* SENSOR_TOPIC = "test/sensor";
@@ -45,21 +47,22 @@ const char* PAYLOAD_OFF = "OFF";
   //The wifi has been requested?
 bool wifiRequested = false;
 
-  //Led blink global variables -> led status, time of the next blink, time between two blinks, boolean that tells id we should try reconnecting.
+  //Led blink global variables
 bool ledStatus = false;
-unsigned long nextBlinkMillis = 0;
-unsigned long blinkInterval = NO_WIFI;
+AsyncTimer blinkTimer(NO_WIFI);
 //unsigned long blinkTemp = 0; //Debug
-bool reconnect = false;
 
-  //Sensor reading variables -> sensor value, time of the next publishing
+  //Sensor reading variables
 bool sensorValue = false;
-unsigned long nextSensorMillis = 0;
+AsyncTimer sensorTimer(SENSOR_DELAY);
 
-  //Periodic status publishing variables -> publishStatus tells the system if it should publish at the current loop, the other is the time of the next publishing. RelayStatus is the current status of the relay
+  //Periodic status publishing variables -> publishStatus tells the system if it should publish at the current loop, relayStatus is the current status of the relay
 bool relayStatus = false;
 bool publishStatus = false;
-unsigned long nextStatusMillis = 0;
+AsyncTimer pubTimer(PUB_DELAY);
+
+  //If MQTT is not running, reconnecting should be attempted with a delay.
+AsyncTimer recTimer(REC_DELAY);
 
 
   //Holds the command to execute
@@ -112,10 +115,11 @@ void setup() {
   }
   Serial.println("READY");
 
-  //Init timer global variables
-  nextBlinkMillis = millis() + blinkInterval;
-  nextStatusMillis = millis() + PUB_DELAY;
-  nextSensorMillis = millis() + SENSOR_DELAY;
+  //Reset the timers
+  blinkTimer.reset();
+  pubTimer.reset();
+  sensorTimer.reset();
+  recTimer.reset();
   
 }
 
@@ -179,31 +183,30 @@ void checkTimers() {
   //Sample the current time
   unsigned long currentMillis = millis();
 
-  //Blink and MQTT connecting timer handling
-  if (blinkInterval == WORKING) { //If the system is working leave the led on
+  //Led blink timer handling
+  if (blinkTimer.getInterval() == WORKING) { //If the system is working keep the led on
     digitalWrite(LED_BUILTIN, LOW);
     ledStatus = true;
-  } else if(currentMillis >= nextBlinkMillis) {
+  } else if(blinkTimer.expired()) {
     triggerLed();
-    reconnect = true;
-    nextBlinkMillis = currentMillis + blinkInterval;
+    blinkTimer.reset();
   }
 
     //Sensor reading timer handling
-  if(currentMillis >= nextSensorMillis) {
+  if(sensorTimer.expired()) {
     bool tempValue = digitalRead(SENSOR_PIN);
-    if(tempValue != sensorValue) { //If there has been a change of the sensor value, publish the status to alert the server. Generally for int values, check if abs(difference) is greater than a threshold value
+    if(tempValue != sensorValue) { //If there has been a change of the sensor value, publish the status to alert the server. Generally, for int values, check if abs(difference) is greater than a threshold value
       publishStatus = true;
       Serial.println("Change of sensor value");
     }
     sensorValue = tempValue;
-    nextSensorMillis = currentMillis + SENSOR_DELAY;
+    sensorTimer.reset();
   }
 
   //Publish status timer handling
-  if(currentMillis >= nextStatusMillis) {
+  if(pubTimer.expired()) {
     publishStatus = true;
-    nextStatusMillis = currentMillis + PUB_DELAY;
+    pubTimer.reset();
   }
   
 }
@@ -217,39 +220,31 @@ void checkConnectivity() {
   if(WiFi.status() != WL_CONNECTED) {
     if(!wifiRequested) {
       WiFi.begin(WL_SSID, WL_PWD);
-      blinkInterval = NO_WIFI;
+      blinkTimer.setInterval(NO_WIFI);
       wifiRequested = true;
     }
   } else {
     wifiRequested = false;
     //Check if MQTT is not connected
     if (!mqttClient.connected()) {
-      if (reconnect) {
+      if (recTimer.expired()) {
         Serial.println(" MQTT RECONNECT");
         if(mqttClient.connect(CLIENT_ID, USERNAME, PASSWORD)) {
           mqttClient.subscribe(COMMAND_TOPIC);
           /* Please add topics */
         }
-        reconnect = false;
+        recTimer.reset();
       }
-      blinkInterval = NO_MQTT;
+      blinkTimer.setInterval(NO_MQTT);
     } else {
-      blinkInterval = WORKING;
+      blinkTimer.setInterval(WORKING);
       //Publish the status
       if(publishStatus) {
         publishStatus = false;
+
+        mqttClient.publish(STATE_TOPIC, toPayload(relayStatus));
+        mqttClient.publish(STATE_TOPIC, toPayload(sensorValue));
         
-        if(relayStatus) {
-          mqttClient.publish(STATE_TOPIC, PAYLOAD_ON);
-        } else {
-          mqttClient.publish(STATE_TOPIC, PAYLOAD_OFF);
-        }
-        
-        if(sensorValue) {
-          mqttClient.publish(SENSOR_TOPIC, PAYLOAD_ON);
-        } else {
-          mqttClient.publish(SENSOR_TOPIC, PAYLOAD_OFF);
-        }
         mqttClient.publish(STATE_TOPIC, " "); //Debug only
         
         /* Please add publish statements here */
@@ -291,13 +286,19 @@ void callback(char* topic, byte* payload, unsigned int len) {
 
 //This method triggers the LED_BUILTIN. Note that the LED is on when LOW is set.
 void triggerLed() {
-  if(ledStatus) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    ledStatus = false;
-  } else {
-    digitalWrite(LED_BUILTIN, LOW);
-    ledStatus = true;
-  }
   
+  ledStatus = !ledStatus;
+  digitalWrite(LED_BUILTIN, ledStatus);
+  
+}
+
+
+
+//This method converts a bool to the on/off payload
+const char* toPayload (bool b) {
+  if(b) {
+    return PAYLOAD_ON;
+  }
+  return PAYLOAD_OFF;
 }
 
