@@ -1,5 +1,9 @@
-//Template of firmware for ESP 8266 to control an automated system with MQTT protocol
-//The example device has a relay connected at pin 12 and a sensor connected at PIN 14 that a binary value
+/*  
+ *  esp_template.ino - Template of firmware for ESP 8266 to control an automated system with MQTT protocol
+ *  The example device has a relay connected at pin 12 and a binary sensor connected at PIN 14
+ *  Created by Tommaso Ciussani, August 1, 2017.
+ *  Released into the public domain.
+ */
 
 //Global includes
 #include <ESP8266WiFi.h>
@@ -25,15 +29,15 @@
 
 //Global constants
 // Wifi
-const PROGMEM char* WL_SSID = "wifi";
-const PROGMEM char* WL_PWD = "q167JT3W";
+const PROGMEM char* WL_SSID = "your_ssid";
+const PROGMEM char* WL_PWD = "your_password";
 
 // MQTT
 const PROGMEM char* SERVER = "192.168.1.4";
 const PROGMEM uint16_t PORT = 1883;
 const PROGMEM char* CLIENT_ID = "your_client_id";
-const PROGMEM char* USERNAME = "test";
-const PROGMEM char* PASSWORD = "4vxQbCcZNcscp4nd";
+const PROGMEM char* USERNAME = "user";
+const PROGMEM char* PASSWORD = "password";
 const PROGMEM char* STATE_TOPIC = "test/status";
 const PROGMEM char* COMMAND_TOPIC = "test/commands";
 const PROGMEM char* SENSOR_TOPIC = "test/sensor";
@@ -79,12 +83,14 @@ void setup() {
   
   //Serial setup. Serial can be left in the final sketch since the ESP has lots of memory
   Serial.begin(115200);
+
+  //Set the wifi mode to "station"
   WiFi.mode(WIFI_STA);
   
   //Pins initialization
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW);
+  digitalInvertedWrite(RELAY_PIN, LOW); //The relay that I own has inverted logic
   pinMode(SENSOR_PIN, INPUT);
   /* Please complete with modes and initial states for output pins */
 
@@ -100,7 +106,7 @@ void setup() {
     bool is_on = EEPROM.read(STATUS_ADDR);
     relayStatus = is_on;
     Serial.println("EEPROM value: "); Serial.println(is_on);
-    digitalWrite(RELAY_PIN, is_on);
+    digitalInvertedWrite(RELAY_PIN, is_on);
   } else {
     //Else leave the default values
     Serial.println("Invalid EEPROM");
@@ -108,9 +114,9 @@ void setup() {
 
   //Led initialization pattern. Please note that in the ESP8266 NodeMcu board the LED_BUILTIN is on when the value is LOW.
   for (int i = 0; i < 10; i++) {
-    digitalWrite(LED_BUILTIN, LOW);
+    digitalInvertedWrite(LED_BUILTIN, LOW);
     delay(50);
-    digitalWrite(LED_BUILTIN, HIGH);
+    digitalInvertedWrite(LED_BUILTIN, HIGH);
     delay(50);
   }
   Serial.println("READY");
@@ -154,7 +160,7 @@ void executeCommand() {
   uint8_t cmd = command;
   command = ERR;
   if (cmd == 0) {
-    digitalWrite(RELAY_PIN, HIGH);
+    digitalInvertedWrite(RELAY_PIN, HIGH);
     relayStatus = true;
     EEPROM.write(VALID_ADDR, true);
     EEPROM.write(STATUS_ADDR, true);
@@ -162,7 +168,7 @@ void executeCommand() {
     Serial.println("Executed command 0");
     publishStatus = true; //Publish the status immediately to let Home Assistant know of the change
   } else if (cmd == 1) {
-    digitalWrite(RELAY_PIN, LOW);
+    digitalInvertedWrite(RELAY_PIN, LOW);
     relayStatus = false;
     EEPROM.write(VALID_ADDR, true);
     EEPROM.write(STATUS_ADDR, false);
@@ -179,13 +185,10 @@ void executeCommand() {
 
 //This method checks if the Millis timers have expired. The timers work by saving the Millis value of the event. This way the Millis overflow problem is solved, as stated in the Arduino wiki.
 void checkTimers() {
-  
-  //Sample the current time
-  unsigned long currentMillis = millis();
 
   //Led blink timer handling
   if (blinkTimer.getInterval() == WORKING) { //If the system is working keep the led on
-    digitalWrite(LED_BUILTIN, LOW);
+    digitalInvertedWrite(LED_BUILTIN, HIGH);
     ledStatus = true;
   } else if(blinkTimer.expired()) {
     triggerLed();
@@ -288,7 +291,7 @@ void callback(char* topic, byte* payload, unsigned int len) {
 void triggerLed() {
   
   ledStatus = !ledStatus;
-  digitalWrite(LED_BUILTIN, ledStatus);
+  digitalInvertedWrite(LED_BUILTIN, ledStatus);
   
 }
 
@@ -300,5 +303,12 @@ const char* toPayload (bool b) {
     return PAYLOAD_ON;
   }
   return PAYLOAD_OFF;
+}
+
+
+
+//This method writes the inverted value to a pin
+void digitalInvertedWrite(int pinNumber, bool statusBool) {
+  digitalWrite(pinNumber, !statusBool);
 }
 
