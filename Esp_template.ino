@@ -19,7 +19,9 @@
 #define WORKING   0
 #define PUB_DELAY 30000 //This should be the sensor status publishing interval
 #define SENSOR_DELAY 1000 //This should be the actual sensor reading delay. The difference helps keeping low bandwidth occupation.
+#define HOSTDOWN_THRESH 1000
 #define REC_DELAY 2000
+#define REC_LONG_DELAY 30000
 #define ERR       4
 #define VALID_ADDR 0
 #define STATUS_ADDR 1
@@ -226,13 +228,24 @@ void checkConnectivity() {
       blinkTimer.setInterval(NO_WIFI);
       wifiRequested = true;
     }
+    recTimer.setInterval(REC_DELAY);
   } else {
     wifiRequested = false;
     //Check if MQTT is not connected
     if (!mqttClient.connected()) {
       if (recTimer.expired()) {
         Serial.println(" MQTT RECONNECT");
-        if(mqttClient.connect(CLIENT_ID, USERNAME, PASSWORD)) {
+        unsigned long before = millis();
+        mqttClient.connect(CLIENT_ID, USERNAME, PASSWORD);
+        unsigned long after = millis();
+        //Check if the broker machine is connected to the LAN. If not, connect will hang for 6 seconds and this is unwanted.
+        //The connection fails with a timeout and there is nothing to do to remove this blocking delay. Fall back to a longer timer interval.
+        if ((after - before) > HOSTDOWN_THRESH) {
+          recTimer.setInterval(REC_LONG_DELAY);
+        } else {
+          recTimer.setInterval(REC_DELAY);
+        }
+        if(mqttClient.connected()) {
           mqttClient.subscribe(COMMAND_TOPIC);
           /* Please add topics */
         }
@@ -241,6 +254,7 @@ void checkConnectivity() {
       blinkTimer.setInterval(NO_MQTT);
     } else {
       blinkTimer.setInterval(WORKING);
+      recTimer.setInterval(REC_DELAY);
       //Publish the status
       if(publishStatus) {
         publishStatus = false;
